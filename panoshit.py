@@ -310,7 +310,7 @@ class Pano:
                  outdir_path: Optional[str],
                  lenses: Iterable[Lens] = ALL_LENSES,
                  projections: Iterable[Projection] = ALL_PROJECTIONS,
-                 threads: int = 4):
+                 threads: int = 4) -> str:
             if self.control_points is None:
                 self._create_control_points()
             if outdir_path:
@@ -322,7 +322,8 @@ class Pano:
             #os.chdir(proj_directory)
             file_args = " ".join(f.path for f in self.images)
             #threads = []
-            log = Logger(open(os.path.join(proj_directory, "log.txt"), 'w'), print=True)
+            log_path = os.path.join(proj_directory, "log.txt")
+            log = Logger(open(log_path, 'w'), print=True)
             future_results = []
             with ThreadPoolExecutor(max_workers=threads) as thread_pool:
                 # TODO use hsi?
@@ -339,6 +340,7 @@ class Pano:
                     except Exception as e:
                         log.log(f"Exception: {traceback.format_exception(e)}")
             log.close()
+            return log_path
             #        t = Thread(target=self.run, args=[proj_directory, l, p, outfile1])
             #        t.start()
             #        threads.append(t)
