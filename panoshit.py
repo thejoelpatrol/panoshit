@@ -202,7 +202,7 @@ class Pano:
         self.vfov = vfov
         self.random = Random(self.seed)
         self.width = width
-        self.images = list()
+        self.images: List[PanoImage] = list()
         for i, path in enumerate(image_paths):
             self.images.append(PanoImage(path, i))
         self.height = (len(self.images) // width) + (0 if len(self.images) % width == 0 else 1)
