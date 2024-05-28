@@ -74,7 +74,7 @@ def main(args: argparse.Namespace):
     for i, r in enumerate(future_results):
         while not r.done():
             time.sleep(0.1)
-        
+
         e = r.exception()
         if (e):
             print(traceback.format_exception(e))

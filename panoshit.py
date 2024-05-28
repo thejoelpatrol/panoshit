@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import sys
 import time
@@ -8,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from io import TextIOBase, StringIO
+from pathlib import Path
 from random import Random
 from threading import Thread
 from typing import List, Optional, Iterable
@@ -19,7 +21,8 @@ VERT_INC = 15
 
 class ControlPointArrangementStrategy(Enum):
     EQUAL = 0
-    RANDOM = 1
+    AUTO = 1
+    RANDOM = 2
     ROUGH = 2
 
 class Lens(Enum):
@@ -179,14 +182,14 @@ class Pano:
                  fov: Optional[float] = 179,
                  vfov: Optional[float] = 140,
                  batch_id: Optional[int] = None,
-                 use_static_seed: bool = False,
-                 static_seed: Optional[int] = 25,):
+                 #use_static_seed: bool = False,
+                 static_seed: Optional[int] = None,):
         now = int(time.time() * 1000000)
         if batch_id:
             self.batch_id = batch_id
         else:
             self.batch_id = now
-        if use_static_seed:
+        if static_seed is not None:
             self.seed = static_seed
         else:
             self.seed = now
@@ -257,6 +260,7 @@ class Pano:
         self._generate_grid()
         self._create_control_points()
 
+
     def _create_vertical_cp(self, top: PanoImage, bottom: PanoImage) -> Iterable[ControlPoint]:
         result = list()
         sections = self.points_per_pair + 1
@@ -268,7 +272,14 @@ class Pano:
             for i in range(self.points_per_pair):
                 result.append(ControlPoint(top.index, bottom.index, top_x_inc*(i+1), top_y, bottom_x_inc*(i+1), bottom_y))
         elif self.strategy == ControlPointArrangementStrategy.RANDOM:
-            raise NotImplementedError()
+            top_y_bound = min(top.height - (top.height / sections), top.height - MAX_BLEND_PIXELS)
+            bottom_y_bound = min(bottom.height / sections, MAX_BLEND_PIXELS)
+            for i in range(self.points_per_pair):
+                top_x = self.random.randint(0, top.width)
+                bottom_x = self.random.randint(0, bottom.width)
+                top_y = self.random.randint(top_y_bound, top.height)
+                bottom_y = self.random.randint(0, bottom_y_bound)
+                result.append(ControlPoint(top.index, bottom.index, top_x, top_y, bottom_x, bottom_y))
         elif self.strategy == ControlPointArrangementStrategy.ROUGH:
             raise NotImplementedError()
         else:
@@ -286,7 +297,14 @@ class Pano:
             for i in range(self.points_per_pair):
                 result.append(ControlPoint(left.index, right.index, left_x, left_y_inc*(i+1), right_x, right_y_inc*(i+1)))
         elif self.strategy == ControlPointArrangementStrategy.RANDOM:
-            raise NotImplementedError()
+            left_x_bound = min(left.width - (left.width / sections), left.width - MAX_BLEND_PIXELS)
+            right_x_bound = min(right.width / sections, MAX_BLEND_PIXELS)
+            for i in range(self.points_per_pair):
+                left_x = self.random.randint(left_x_bound, left.width)
+                right_x = self.random.randint(0, right_x_bound)
+                left_y = self.random.randint(0, left.height)
+                right_y = self.random.randint(0, right.height)
+                result.append(ControlPoint(left.index, right.index, left_x, left_y, right_x,right_y))
         elif self.strategy == ControlPointArrangementStrategy.ROUGH:
             raise NotImplementedError()
         else:
@@ -318,7 +336,7 @@ class Pano:
             else:
                 proj_directory = os.path.join(os.getcwd(), str(self.batch_id))
             if not os.path.exists(proj_directory):
-                os.mkdir(proj_directory)
+                Path(proj_directory).mkdir(parents=True, exist_ok=True)
             #os.chdir(proj_directory)
             file_args = " ".join(f.path for f in self.images)
             #threads = []
@@ -373,10 +391,20 @@ class Pano:
                     line = line.replace("y-0", f"y{self.images[i].y}")
                     i += 1
                 f3.write(line)
-        dry_run = f"hugin_executor --stitching -d --prefix {outfile3} {outfile3}"
+
+        if self.strategy == ControlPointArrangementStrategy.RANDOM:
+            outfile4 = f"pano_{self.batch_id}_s{self.seed}_cp{self.strategy.name}_l{l.name}_lf{self.lens_fov}_f{self.fov}_p{p.name}_a_a.pto"
+            outfile4 = os.path.join(run_dir, outfile4)
+            command = f"autooptimiser -a -o {outfile4} {outfile3}"
+            run_cmd(command, log)
+            final_file = outfile4
+        else:
+            final_file = outfile3
+
+        dry_run = f"hugin_executor --stitching -d --prefix {final_file} {final_file}"
         log.log("Dry run commands for reference:")
         run_cmd(dry_run, log)
-        command = f"hugin_executor --stitching -t 3 --prefix {outfile3} {outfile3}"
+        command = f"hugin_executor --stitching -t 3 --prefix {final_file} {final_file}"
         run_cmd(command, log)
         log.close()
         return log_path
