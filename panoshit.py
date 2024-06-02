@@ -351,7 +351,7 @@ class Pano:
                     run_cmd(command, log)
                     for p in projections:
                         log.log(f"submitting job ({l.name}, {p.name})")
-                        future_results.append(thread_pool.submit(self.run, proj_directory, l, p, outfile1))
+                        future_results.append(thread_pool.submit(self.run, proj_directory, l, p, outfile1, threads))
                 for future in future_results:
                     try:
                         log.log(f"Log: {future.result()}")
@@ -365,7 +365,7 @@ class Pano:
             #for t in threads:
             #    t.join()
 
-    def run(self, proj_directory: str, l: Lens, p: Projection, pto_file: str) -> str:
+    def run(self, proj_directory: str, l: Lens, p: Projection, pto_file: str, threads: int) -> str:
         run_dir = os.path.join(proj_directory, f"l{l.name}_p{p.name}")
         os.mkdir(run_dir)
         log_path = os.path.join(run_dir, "log.txt")
@@ -401,10 +401,27 @@ class Pano:
         else:
             final_file = outfile3
 
-        dry_run = f"hugin_executor --stitching -d --prefix {final_file} {final_file}"
-        log.log("Dry run commands for reference:")
-        run_cmd(dry_run, log)
-        command = f"hugin_executor --stitching -t 3 --prefix {final_file} {final_file}"
-        run_cmd(command, log)
+
+        os.environ['OMP_NUM_THREADS'] = str(threads)
+        os.chdir(run_dir)
+        prefix = os.path.splitext(os.path.basename(final_file))[0]
+        nona_cmd = f"nona -v -z LZW -r ldr -m TIFF_m -o {prefix} {final_file}"
+        run_cmd(nona_cmd, log)
+
+        enblend_cmd = f"enblend  -f{self.pixel_width}x{self.pixel_height}  --compression=LZW  -o {prefix}.tif --"
+        for i in range(len(self.images)):
+            j = str(i).rjust(4, '0')
+            enblend_cmd += f" {prefix}{j}.tif"
+        run_cmd(enblend_cmd, log)
+
+        for i in range(len(self.images)):
+            j = str(i).rjust(4, '0')
+            os.remove(f"{prefix}{j}.tif")
+
+        #dry_run = f"hugin_executor --stitching -t {threads} -d --prefix {final_file} {final_file}"
+        #log.log("Dry run commands for reference:")
+        #run_cmd(dry_run, log)
+        #command = f"hugin_executor --stitching -t {threads} --prefix {final_file} {final_file}"
+        #run_cmd(command, log)
         log.close()
         return log_path
