@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 import sys
@@ -365,11 +366,24 @@ class Pano:
             #for t in threads:
             #    t.join()
 
+    def get_optimized_file_list(self, pto_path: str) -> List[str]:
+        files = []
+        pattern = re.compile(r"^.+Vm5 n\"(.+)\"")
+        with open(pto_path, 'r') as f:
+            lines = f.read().splitlines()
+        for line in lines:
+            match = pattern.match(line)
+            file = match.group(1)
+            files.append(file)
+        return files
+
     def run(self, proj_directory: str, l: Lens, p: Projection, pto_file: str, threads: int) -> str:
         run_dir = os.path.join(proj_directory, f"l{l.name}_p{p.name}")
         os.mkdir(run_dir)
         log_path = os.path.join(run_dir, "log.txt")
         log = Logger(open(log_path, 'w'), print=False)
+        os.environ['OMP_NUM_THREADS'] = str(threads)
+
         outfile2 = f"pano_{self.batch_id}_s{self.seed}_cp{self.strategy.name}_l{l.name}_lf{self.lens_fov}_f{self.fov}_p{p.name}.pto"
         log.log(outfile2)
         outfile2 = os.path.join(run_dir, outfile2)
@@ -393,35 +407,50 @@ class Pano:
                 f3.write(line)
 
         if self.strategy == ControlPointArrangementStrategy.RANDOM:
-            outfile4 = f"pano_{self.batch_id}_s{self.seed}_cp{self.strategy.name}_l{l.name}_lf{self.lens_fov}_f{self.fov}_p{p.name}_a_a.pto"
+            outfile4 = f"pano_{self.batch_id}_s{self.seed}_cp{self.strategy.name}_l{l.name}_lf{self.lens_fov}_f{self.fov}_p{p.name}_a_o.pto"
             outfile4 = os.path.join(run_dir, outfile4)
-            command = f"autooptimiser -a -o {outfile4} {outfile3}"
+            cmd = f"pto_var --opt=y,p --anchor={len(self.images) // 2} -o {outfile4} {outfile3}"
+            run_cmd(cmd, log)
+
+            outfile5 = f"pano_{self.batch_id}_s{self.seed}_cp{self.strategy.name}_l{l.name}_lf{self.lens_fov}_f{self.fov}_p{p.name}_a_o_a.pto"
+            outfile5 = os.path.join(run_dir, outfile5)
+            command = f"autooptimiser -a -o {outfile5} {outfile4}"
             run_cmd(command, log)
-            final_file = outfile4
+            #files = self.get_optimized_file_list(outfile5)
+            final_pto_file = outfile5
         else:
-            final_file = outfile3
+            #files = [image.path for image in self.images]
+            final_pto_file = outfile3
 
-
-        os.environ['OMP_NUM_THREADS'] = str(threads)
-        os.chdir(run_dir)
-        prefix = os.path.splitext(os.path.basename(final_file))[0]
-        nona_cmd = f"nona -v -z LZW -r ldr -m TIFF_m -o {prefix} {final_file}"
+        #prefix = os.path.splitext(os.path.basename(final_pto_file))[0]
+        prefix = "nona_map"
+        temp_tif_prefix = os.path.join(run_dir, prefix)
+        nona_cmd = f"nona -v -z LZW -r ldr -m TIFF_m -o {temp_tif_prefix} {final_pto_file}"
         run_cmd(nona_cmd, log)
 
-        enblend_cmd = f"enblend  -f{self.pixel_width}x{self.pixel_height}  --compression=LZW  -o {prefix}.tif --"
+        final_outfile = os.path.join(run_dir, f"{os.path.splitext(os.path.basename(final_pto_file))[0]}.tif")
+        enblend_cmd = f"enblend -f{self.pixel_width}x{self.pixel_height}  --compression=LZW  -o {final_outfile} -- "
         for i in range(len(self.images)):
             j = str(i).rjust(4, '0')
-            enblend_cmd += f" {prefix}{j}.tif"
+            basename = f"{prefix}{j}.tif"
+            path = os.path.join(run_dir, basename)
+            enblend_cmd += f" {path}"
         run_cmd(enblend_cmd, log)
 
-        for i in range(len(self.images)):
-            j = str(i).rjust(4, '0')
-            os.remove(f"{prefix}{j}.tif")
+        log.close()
+        #for i in range(len(self.images)):
+        #    try:
+        #        j = str(i).rjust(4, '0')
+        #        basename = f"{prefix}{j}.tif"
+        #        path = os.path.join(run_dir, basename)
+        #        os.remove(path)
+        #    except FileNotFoundError:
+        #        pass
 
         #dry_run = f"hugin_executor --stitching -t {threads} -d --prefix {final_file} {final_file}"
         #log.log("Dry run commands for reference:")
         #run_cmd(dry_run, log)
         #command = f"hugin_executor --stitching -t {threads} --prefix {final_file} {final_file}"
         #run_cmd(command, log)
-        log.close()
+
         return log_path
