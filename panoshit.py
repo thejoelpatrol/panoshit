@@ -5,11 +5,13 @@ import sys
 import time
 import os
 import traceback
+from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.thread import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from io import TextIOBase, StringIO
+from multiprocessing import Pool
 from pathlib import Path
 from random import Random
 from threading import Thread
@@ -152,7 +154,7 @@ def read_directory(path: str) -> List[str]:
     return images
 
 def run_cmd(command: str, log: Logger):
-    log.log("$ " + command, newline=False)
+    log.log(f"$ {command}" , newline=True)
     args = command.split(" ")
 
     with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1,  universal_newlines=True) as p:
@@ -344,7 +346,7 @@ class Pano:
             log_path = os.path.join(proj_directory, "log.txt")
             log = Logger(open(log_path, 'w'), print=True)
             future_results = []
-            with ThreadPoolExecutor(max_workers=threads) as thread_pool:
+            with ProcessPoolExecutor(max_workers=threads) as process_pool:
                 # TODO use hsi?
                 for l in lenses:
                     outfile1 = os.path.join(proj_directory, f"pano_{self.batch_id}_s{self.seed}_cp{self.strategy.name}_l{l.name}_lf{self.lens_fov}.pto")
@@ -352,7 +354,7 @@ class Pano:
                     run_cmd(command, log)
                     for p in projections:
                         log.log(f"submitting job ({l.name}, {p.name})")
-                        future_results.append(thread_pool.submit(self.run, proj_directory, l, p, outfile1, threads))
+                        future_results.append(process_pool.submit(self.run, proj_directory, l, p, outfile1, threads))
                 for future in future_results:
                     try:
                         log.log(f"Log: {future.result()}")
@@ -368,18 +370,22 @@ class Pano:
 
     def get_optimized_file_list(self, pto_path: str) -> List[str]:
         files = []
-        pattern = re.compile(r"^.+Vm5 n\"(.+)\"")
+        pattern = re.compile(r"^i.+Vm5 n\"(.+)\"")
         with open(pto_path, 'r') as f:
             lines = f.read().splitlines()
         for line in lines:
             match = pattern.match(line)
-            file = match.group(1)
-            files.append(file)
+            if match:
+                file = match.group(1)
+                files.append(file)
+        if len(files) == 0:
+            raise RuntimeError(f"couldn't find any matching lines in {pto_path}")
         return files
 
     def run(self, proj_directory: str, l: Lens, p: Projection, pto_file: str, threads: int) -> str:
         run_dir = os.path.join(proj_directory, f"l{l.name}_p{p.name}")
         os.mkdir(run_dir)
+        os.chdir(run_dir)
         log_path = os.path.join(run_dir, "log.txt")
         log = Logger(open(log_path, 'w'), print=False)
         os.environ['OMP_NUM_THREADS'] = str(threads)
@@ -430,22 +436,24 @@ class Pano:
 
         final_outfile = os.path.join(run_dir, f"{os.path.splitext(os.path.basename(final_pto_file))[0]}.tif")
         enblend_cmd = f"enblend -f{self.pixel_width}x{self.pixel_height}  --compression=LZW  -o {final_outfile} -- "
-        for i in range(len(self.images)):
-            j = str(i).rjust(4, '0')
-            basename = f"{prefix}{j}.tif"
-            path = os.path.join(run_dir, basename)
-            enblend_cmd += f" {path}"
+        input_file_list = self.get_optimized_file_list(final_pto_file)
+        nona_files = []
+        for i in range(len(input_file_list)):
+            basename = f"{temp_tif_prefix}{i:04}.tif"
+            nona_files.append(basename)
+            enblend_cmd += f" {basename}"
+
+        #for file in self.get_optimized_file_list(final_pto_file):
+        #    path = os.path.join(run_dir, file)
+        #    enblend_cmd += f" {path}"
         run_cmd(enblend_cmd, log)
 
         log.close()
-        #for i in range(len(self.images)):
-        #    try:
-        #        j = str(i).rjust(4, '0')
-        #        basename = f"{prefix}{j}.tif"
-        #        path = os.path.join(run_dir, basename)
-        #        os.remove(path)
-        #    except FileNotFoundError:
-        #        pass
+        for f in nona_files:
+            try:
+                os.remove(f)
+            except FileNotFoundError:
+                pass
 
         #dry_run = f"hugin_executor --stitching -t {threads} -d --prefix {final_file} {final_file}"
         #log.log("Dry run commands for reference:")
